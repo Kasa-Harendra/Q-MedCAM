@@ -71,6 +71,7 @@ def run_single_inference(
         output_path=out_path,
         image_id=image_id,
         p_malignant=p_malignant,
+        threshold=threshold,
         dpi=dpi
     )
     return saved_file, p_malignant, classification
@@ -82,16 +83,32 @@ def main():
     parser.add_argument("--output_dir", type=str, default="outputs/xai", help="Directory to save 300 DPI artifacts")
     parser.add_argument("--dpi", type=int, default=300, help="Resolution for composite artifact")
     parser.add_argument("--threshold", type=float, default=0.65, help="Calibrated classification threshold (default: 0.65)")
-    parser.add_argument("--backbone", type=str, default="resnet18", help="Backbone: resnet18, efficientnet_b0, efficientnet_b2")
+    parser.add_argument("--backbone", type=str, default=None, help="Backbone: resnet18, efficientnet_b0, efficientnet_b2 (auto-detected if None)")
     args = parser.parse_args()
 
     device = get_torch_device()
     print(f"[XAI Inference] Device: {device}")
 
-    model = QMedCAMHybridModel(backbone_type=args.backbone, pretrained=False, bottleneck_dim=4)
+    # Auto-detect backbone if not explicitly specified
+    backbone_type = args.backbone
+    state_dict = None
     if os.path.exists(args.checkpoint):
         checkpoint = torch.load(args.checkpoint, map_location=device)
         state_dict = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
+        if backbone_type is None:
+            keys_str = " ".join(list(state_dict.keys())[:10])
+            if "features" in keys_str:
+                backbone_type = "efficientnet_b0"
+            elif "conv1" in keys_str:
+                backbone_type = "resnet18"
+            else:
+                backbone_type = "efficientnet_b0"
+    if backbone_type is None:
+        backbone_type = "efficientnet_b0"
+
+    print(f"[XAI Inference] Architecture Backbone: {backbone_type}")
+    model = QMedCAMHybridModel(backbone_type=backbone_type, pretrained=False, bottleneck_dim=4)
+    if state_dict is not None:
         model.load_state_dict(state_dict, strict=False)
         print(f"[XAI Inference] Loaded weights from {args.checkpoint}")
     else:

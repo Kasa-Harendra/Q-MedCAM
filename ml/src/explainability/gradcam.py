@@ -57,10 +57,15 @@ class HybridGradCAM:
 
         # Forward pass
         logits = self.model(input_tensor)
-        prob_malignant = torch.sigmoid(logits)
 
-        # Target score for backpropagation
-        score = prob_malignant if target_class == 1 else (1.0 - prob_malignant)
+        # Target score for backpropagation:
+        # Selvaraju et al. (2017) specifies backpropagating raw unnormalized class scores y^c
+        # (before sigmoid/softmax). Backpropagating post-sigmoid probabilities causes gradient
+        # vanishing/saturation when the model is confident (sigma'(z) -> 0 as p -> 1 or 0).
+        if target_class == 1:
+            score = logits.view(-1)[0]
+        else:
+            score = -logits.view(-1)[0]
 
         # Zero gradients
         self.model.zero_grad()
