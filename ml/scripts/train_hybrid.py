@@ -87,13 +87,14 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=config["data"]["batch_size"], shuffle=False)
 
     model = QMedCAMHybridModel(
+        backbone_type=config["model"].get("backbone", "resnet18"),
         pretrained=config["model"]["pretrained"],
         bottleneck_dim=config["model"]["bottleneck_dim"],
         ansatz_reps=config["quantum"]["ansatz_reps"],
         feature_map_reps=config["quantum"]["feature_map_reps"],
         entanglement=config["quantum"]["entanglement"],
         use_residual=config["model"].get("use_residual", True),
-        multi_observable=config["model"].get("multi_observable", True),
+        multi_observable=config["model"].get("multi_observable", False),
         use_attention=config["model"].get("use_attention", True)
     )
 

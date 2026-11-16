@@ -27,10 +27,13 @@ def main():
     parser = argparse.ArgumentParser(description="Train Classical ResNet18 Baseline")
     parser.add_argument("--config", type=str, default="configs/config.yaml", help="Path to config file")
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
+    parser.add_argument("--backbone", type=str, default=None, help="Backbone: resnet18, efficientnet_b0, efficientnet_b2")
     args = parser.parse_args()
 
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
+
+    backbone_name = (args.backbone or config["model"].get("backbone", "resnet18")).lower()
 
     device = get_torch_device()
     print(f"[Baseline] Using compute device: {device}")
@@ -68,14 +71,25 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=config["data"]["batch_size"], shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=config["data"]["batch_size"], shuffle=False)
 
-    # Standard ResNet18 with binary classification head
-    model = resnet18(weights=ResNet18_Weights.DEFAULT)
-    model.fc = nn.Linear(model.fc.in_features, 1)
+    # Instantiate chosen backbone with binary classification head
+    if "efficientnet" in backbone_name:
+        from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+        model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
+        in_features = model.classifier[1].in_features
+        model.classifier[1] = nn.Linear(in_features, 1)
+        backbone_params = [p for n, p in model.named_parameters() if not n.startswith("classifier.1")]
+        head_params = list(model.classifier[1].parameters())
+        save_path = os.path.join(config["training"]["checkpoint_dir"], f"baseline_{backbone_name}.pt")
+    else:
+        model = resnet18(weights=ResNet18_Weights.DEFAULT)
+        model.fc = nn.Linear(model.fc.in_features, 1)
+        backbone_params = [p for n, p in model.named_parameters() if not n.startswith("fc")]
+        head_params = list(model.fc.parameters())
+        save_path = os.path.join(config["training"]["checkpoint_dir"], "baseline_resnet18.pt")
+
     model = model.to(device)
 
     # Differentiated learning rates for stable fine-tuning:
-    backbone_params = [p for n, p in model.named_parameters() if not n.startswith("fc")]
-    head_params = list(model.fc.parameters())
     optimizer = torch.optim.AdamW([
         {"params": backbone_params, "lr": 1e-4, "weight_decay": 1e-4},
         {"params": head_params, "lr": 1e-3, "weight_decay": 1e-4}
@@ -86,7 +100,6 @@ def main():
     best_val_auc = 0.0
 
     os.makedirs(config["training"]["checkpoint_dir"], exist_ok=True)
-    save_path = os.path.join(config["training"]["checkpoint_dir"], "baseline_resnet18.pt")
 
     for epoch in range(1, epochs + 1):
         model.train()

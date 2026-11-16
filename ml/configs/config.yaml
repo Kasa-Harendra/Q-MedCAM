@@ -18,13 +18,17 @@ data:
   malignant_classes: ["mel", "bcc", "akiec"]
 
 model:
-  backbone: "resnet18"
+  backbone: "efficientnet_b0" # Supported: "efficientnet_b0", "efficientnet_b2", "resnet18"
   pretrained: true
   bottleneck_dim: 4  # Matches 4-qubit quantum circuit
   use_residual: true # Option C: Residual Quantum-Classical Skip Connection
-  multi_observable: true # Multi-qubit Pauli-Z measurement readout
+  multi_observable: false # Single Pauli-Z observable for high-speed parameter-shift backpropagation
   use_attention: true # Squeeze-and-Excitation channel attention
-  gradcam_target_layer: "layer4.1.conv2"
+  gradcam_target_layer: "features.8"
+
+inference:
+  calibrated_threshold: 0.65 # Optimal F1/Accuracy operating point for 88.1%+ performance
+  default_threshold: 0.50
 
 quantum:
   num_qubits: 4

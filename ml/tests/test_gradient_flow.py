@@ -49,3 +49,35 @@ def test_hybrid_gradient_flow():
     quantum_weights = model.quantum_layer.weight
     assert quantum_weights.grad is not None
     assert not torch.isnan(quantum_weights.grad).any()
+
+def test_efficientnet_hybrid_gradient_flow():
+    # Instantiate hybrid model with EfficientNet-B0 backbone
+    model = QMedCAMHybridModel(
+        backbone_type="efficientnet_b0",
+        pretrained=False,
+        bottleneck_dim=4,
+        ansatz_reps=2,
+        feature_map_reps=1
+    )
+    model.train()
+
+    x = torch.randn(2, 3, 224, 224, requires_grad=True)
+    targets = torch.tensor([1.0, 0.0], dtype=torch.float32)
+
+    logits = model(x)
+    assert logits.shape == (2,)
+
+    loss_fn = torch.nn.BCEWithLogitsLoss()
+    loss = loss_fn(logits, targets)
+    loss.backward()
+
+    # Verify gradient on EfficientNet classical head and bottleneck
+    assert model.classical_head.weight.grad is not None
+    assert model.backbone.bottleneck[0].weight.grad is not None
+
+    # Verify gradient reached EfficientNet final conv target layer
+    target_layer = model.get_gradcam_target_layer()
+    # In Conv2dNormActivation, the conv is at index [0]
+    conv_module = target_layer[0] if isinstance(target_layer, torch.nn.Sequential) or hasattr(target_layer, '__getitem__') else target_layer
+    assert conv_module.weight.grad is not None
+    assert torch.abs(conv_module.weight.grad).sum() > 0.0

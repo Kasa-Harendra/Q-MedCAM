@@ -1,108 +1,138 @@
 """
 Classical CNN feature extractor and dimensionality bottleneck.
-Truncates ResNet18 and maps latent representations to 4 dimensions.
+Supports ResNet18 and EfficientNet (B0, B2) backbones and maps latent representations to 4 dimensions.
 """
 
-from typing import Tuple
+from typing import Tuple, Optional
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, ResNet18_Weights
+from torchvision.models import (
+    resnet18, ResNet18_Weights,
+    efficientnet_b0, EfficientNet_B0_Weights,
+    efficientnet_b2, EfficientNet_B2_Weights
+)
 
 class ClassicalBackbone(nn.Module):
     """
-    ResNet18 feature extractor with Linear(512, 4) + Tanh bottleneck.
+    Modular feature extractor (ResNet18 / EfficientNet) with Linear(feature_dim, 4) + Tanh bottleneck.
     """
-    def __init__(self, pretrained: bool = True, bottleneck_dim: int = 4, use_attention: bool = True):
+    def __init__(
+        self,
+        backbone_type: str = "resnet18",
+        pretrained: bool = True,
+        bottleneck_dim: int = 4,
+        use_attention: bool = True
+    ):
         super().__init__()
-        weights = ResNet18_Weights.DEFAULT if pretrained else None
-        base_resnet = resnet18(weights=weights)
+        self.backbone_type = backbone_type.lower()
+        self.bottleneck_dim = bottleneck_dim
+        self.use_attention = use_attention
 
-        # CNN feature extractor up to layer4
-        self.conv1 = base_resnet.conv1
-        self.bn1 = base_resnet.bn1
-        self.relu = base_resnet.relu
-        self.maxpool = base_resnet.maxpool
-        self.layer1 = base_resnet.layer1
-        self.layer2 = base_resnet.layer2
-        self.layer3 = base_resnet.layer3
-        self.layer4 = base_resnet.layer4
+        if self.backbone_type == "resnet18":
+            weights = ResNet18_Weights.DEFAULT if pretrained else None
+            base = resnet18(weights=weights)
+            self.features = nn.Sequential(
+                base.conv1, base.bn1, base.relu, base.maxpool,
+                base.layer1, base.layer2, base.layer3, base.layer4
+            )
+            # Individual references for fine-grained layer freezing/access
+            self.conv1 = base.conv1
+            self.bn1 = base.bn1
+            self.relu = base.relu
+            self.maxpool = base.maxpool
+            self.layer1 = base.layer1
+            self.layer2 = base.layer2
+            self.layer3 = base.layer3
+            self.layer4 = base.layer4
+            self.gradcam_target = self.layer4[-1].conv2
+            self.feature_dim = 512
 
-        # Adaptive pooling & flattening to 512 dimensions
+        elif self.backbone_type in ["efficientnet_b0", "efficientnet"]:
+            weights = EfficientNet_B0_Weights.DEFAULT if pretrained else None
+            base = efficientnet_b0(weights=weights)
+            self.features = base.features
+            self.gradcam_target = self.features[-1]
+            self.feature_dim = 1280
+
+        elif self.backbone_type == "efficientnet_b2":
+            weights = EfficientNet_B2_Weights.DEFAULT if pretrained else None
+            base = efficientnet_b2(weights=weights)
+            self.features = base.features
+            self.gradcam_target = self.features[-1]
+            self.feature_dim = 1408
+
+        else:
+            raise ValueError(f"Unsupported backbone: {backbone_type}. Supported: ['resnet18', 'efficientnet_b0', 'efficientnet_b2']")
+
+        # Adaptive pooling & flattening
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()
 
-        # Squeeze-and-Excitation Channel Attention for dermatological feature salience
-        self.use_attention = use_attention
+        # Squeeze-and-Excitation Channel Attention
         if self.use_attention:
+            hidden_dim = max(self.feature_dim // 8, 32)
             self.channel_attention = nn.Sequential(
-                nn.Linear(512, 64),
+                nn.Linear(self.feature_dim, hidden_dim),
                 nn.ReLU(inplace=True),
-                nn.Linear(64, 512),
+                nn.Linear(hidden_dim, self.feature_dim),
                 nn.Sigmoid()
             )
             # Initialize attention gate near 1.0 (identity passthrough at initialization)
             nn.init.constant_(self.channel_attention[2].bias, 2.0)
 
-        # Classical bottleneck: Linear(512, 4) + Tanh (PRD Section 2.2)
+        # Classical bottleneck: Linear(feature_dim, 4) + Tanh (PRD Section 2.2)
         self.bottleneck = nn.Sequential(
-            nn.Linear(512, bottleneck_dim),
+            nn.Linear(self.feature_dim, bottleneck_dim),
             nn.Tanh()
         )
 
     def get_gradcam_target_layer(self) -> nn.Module:
         """
-        Returns the layer to hook for Grad-CAM: model.layer4[-1].conv2 (PRD REQ-7).
+        Returns target layer for Grad-CAM explainability hooks.
         """
-        return self.layer4[-1].conv2
+        return self.gradcam_target
 
     def freeze_backbone(self):
         """
-        Freezes ResNet convolutional layers (conv1 through layer4),
-        leaving only the 512->4 classical bottleneck trainable.
+        Freezes convolutional feature extractor layers, leaving bottleneck and attention trainable.
         """
-        for module in [self.conv1, self.bn1, self.relu, self.maxpool,
-                       self.layer1, self.layer2, self.layer3, self.layer4]:
-            for param in module.parameters():
-                param.requires_grad = False
+        for param in self.features.parameters():
+            param.requires_grad = False
 
     def unfreeze_backbone(self, unfreeze_layer4_only: bool = False):
         """
         Unfreezes CNN backbone layers for joint fine-tuning.
         """
-        modules = [self.layer4] if unfreeze_layer4_only else [
-            self.conv1, self.bn1, self.relu, self.maxpool,
-            self.layer1, self.layer2, self.layer3, self.layer4
-        ]
-        for module in modules:
-            for param in module.parameters():
+        if unfreeze_layer4_only and self.backbone_type == "resnet18":
+            for param in self.layer4.parameters():
+                param.requires_grad = True
+        elif unfreeze_layer4_only and "efficientnet" in self.backbone_type:
+            # Unfreeze only the final convolutional stage of EfficientNet
+            for param in self.features[-1].parameters():
+                param.requires_grad = True
+        else:
+            for param in self.features.parameters():
                 param.requires_grad = True
 
     def extract_features(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Extracts both the 512-d pooled feature representation and the 4-d latent bottleneck representation.
+        Extracts both the pooled feature representation and the 4-d latent bottleneck representation.
         
         Returns:
-            Tuple of (features_512, latent_4d)
+            Tuple of (features_flat, latent_4d)
         """
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
+        feat = self.features(x)
+        pooled = self.avgpool(feat)
+        feat_flat = self.flatten(pooled)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        feat_512 = self.flatten(x)
         if self.use_attention:
-            attn = self.channel_attention(feat_512)
-            attended_feat = feat_512 * attn
+            attn = self.channel_attention(feat_flat)
+            attended_feat = feat_flat * attn
         else:
-            attended_feat = feat_512
+            attended_feat = feat_flat
+
         latent_4d = self.bottleneck(attended_feat)
-        return feat_512, latent_4d
+        return feat_flat, latent_4d
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, latent_4d = self.extract_features(x)

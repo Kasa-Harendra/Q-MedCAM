@@ -6,7 +6,7 @@ Runs 100% locally with zero external API transmission (HIPAA alignment).
 
 import os
 import sys
-from typing import Optional
+from typing import Optional, Tuple
 import argparse
 import yaml
 import cv2
@@ -27,8 +27,9 @@ def run_single_inference(
     model: QMedCAMHybridModel,
     output_dir: str = "outputs/xai",
     device: Optional[torch.device] = None,
-    dpi: int = 300
-) -> str:
+    dpi: int = 300,
+    threshold: float = 0.65
+) -> Tuple[str, float, str]:
     device = device or torch.device("cpu")
     model.eval()
 
@@ -45,6 +46,8 @@ def run_single_inference(
     with torch.no_grad():
         logits = model(input_tensor)
         p_malignant = float(torch.sigmoid(logits).item())
+
+    classification = "Malignant" if p_malignant >= threshold else "Benign"
 
     # 2. Grad-CAM generation
     input_tensor.requires_grad = True
@@ -70,7 +73,7 @@ def run_single_inference(
         p_malignant=p_malignant,
         dpi=dpi
     )
-    return saved_file
+    return saved_file, p_malignant, classification
 
 def main():
     parser = argparse.ArgumentParser(description="Run Q-MedCAM Clinical Inference & Grad-CAM XAI")
@@ -78,28 +81,32 @@ def main():
     parser.add_argument("--checkpoint", type=str, default="checkpoints/best_qmedcam.pt", help="Path to model weights")
     parser.add_argument("--output_dir", type=str, default="outputs/xai", help="Directory to save 300 DPI artifacts")
     parser.add_argument("--dpi", type=int, default=300, help="Resolution for composite artifact")
+    parser.add_argument("--threshold", type=float, default=0.65, help="Calibrated classification threshold (default: 0.65)")
+    parser.add_argument("--backbone", type=str, default="resnet18", help="Backbone: resnet18, efficientnet_b0, efficientnet_b2")
     args = parser.parse_args()
 
     device = get_torch_device()
     print(f"[XAI Inference] Device: {device}")
 
-    model = QMedCAMHybridModel(pretrained=False, bottleneck_dim=4)
+    model = QMedCAMHybridModel(backbone_type=args.backbone, pretrained=False, bottleneck_dim=4)
     if os.path.exists(args.checkpoint):
         checkpoint = torch.load(args.checkpoint, map_location=device)
         state_dict = checkpoint["model_state_dict"] if "model_state_dict" in checkpoint else checkpoint
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict, strict=False)
         print(f"[XAI Inference] Loaded weights from {args.checkpoint}")
     else:
         print(f"[Warning] Checkpoint not found at {args.checkpoint}. Running with initialized weights for demonstration.")
 
     model = model.to(device)
-    saved_path = run_single_inference(
+    saved_path, p_malignant, classification = run_single_inference(
         image_path=args.image,
         model=model,
         output_dir=args.output_dir,
         device=device,
-        dpi=args.dpi
+        dpi=args.dpi,
+        threshold=args.threshold
     )
+    print(f"[Result] Risk: {p_malignant*100:.2f}% | Calibrated Classification (T={args.threshold:.2f}): {classification}")
     print(f"[Success] Saved 300 DPI Clinical Composite Artifact to: {saved_path}")
 
 if __name__ == "__main__":
