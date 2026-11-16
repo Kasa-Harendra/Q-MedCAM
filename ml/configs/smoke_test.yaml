@@ -1,0 +1,47 @@
+data:
+  batch_size: 16
+  benign_classes:
+  - nv
+  - bkl
+  - df
+  - vasc
+  image_size: 224
+  images_dir: data/synthetic/images
+  malignant_classes:
+  - mel
+  - bcc
+  - akiec
+  metadata_path: data/synthetic/HAM10000_metadata.csv
+  num_workers: 0
+  test_split: 0.15
+  train_split: 0.7
+  val_split: 0.15
+model:
+  backbone: resnet18
+  bottleneck_dim: 4
+  gradcam_target_layer: layer4.1.conv2
+  pretrained: true
+project_name: Q-MedCAM
+quantum:
+  ansatz: RealAmplitudes
+  ansatz_reps: 3
+  entanglement: full
+  feature_map: ZZFeatureMap
+  feature_map_reps: 2
+  num_qubits: 4
+  observable_qubit: 0
+seed: 42
+training:
+  checkpoint_dir: checkpoints
+  backbone_lr: 0.00001
+  classical_lr: 0.001
+  epochs: 2
+  freeze_backbone: false
+  log_dir: runs/q_medcam
+  quantum_lr: 0.0001
+  use_weighted_sampler: true
+  weight_decay: 0.0001
+xai:
+  colormap: jet
+  dpi: 300
+  output_dir: outputs/xai

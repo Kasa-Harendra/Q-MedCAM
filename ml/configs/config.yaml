@@ -1,0 +1,52 @@
+# Q-MedCAM Configuration
+project_name: "Q-MedCAM"
+seed: 42
+
+data:
+  metadata_path: "data/HAM10000_metadata.csv"
+  images_dir: "data/images"
+  train_split: 0.70
+  val_split: 0.15
+  test_split: 0.15
+  image_size: 224
+  batch_size: 32
+  num_workers: 4
+  # Granular HAM10000 diagnosis to binary classification
+  # Benign: nv, bkl, df, vasc (Class 0)
+  # Malignant: mel, bcc, akiec (Class 1)
+  benign_classes: ["nv", "bkl", "df", "vasc"]
+  malignant_classes: ["mel", "bcc", "akiec"]
+
+model:
+  backbone: "resnet18"
+  pretrained: true
+  bottleneck_dim: 4  # Matches 4-qubit quantum circuit
+  use_residual: true # Option C: Residual Quantum-Classical Skip Connection
+  multi_observable: true # Multi-qubit Pauli-Z measurement readout
+  use_attention: true # Squeeze-and-Excitation channel attention
+  gradcam_target_layer: "layer4.1.conv2"
+
+quantum:
+  num_qubits: 4
+  feature_map: "ZZFeatureMap"
+  feature_map_reps: 2
+  ansatz: "RealAmplitudes"
+  ansatz_reps: 3
+  entanglement: "full"
+  observable_qubit: 0
+
+training:
+  epochs: 25
+  freeze_backbone: false  # If true, freezes ResNet backbone and trains ONLY the bottleneck & quantum head
+  backbone_lr: 0.00001    # Differentiated LR for CNN backbone (REQ-4)
+  classical_lr: 0.001     # Standard LR for 512->4 bottleneck (REQ-4)
+  quantum_lr: 0.0001      # Low LR for quantum circuit state stability (REQ-4)
+  weight_decay: 0.0001
+  use_weighted_sampler: true
+  checkpoint_dir: "checkpoints"
+  log_dir: "runs/q_medcam"
+
+xai:
+  dpi: 300
+  colormap: "jet"
+  output_dir: "outputs/xai"
